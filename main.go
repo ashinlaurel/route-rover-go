@@ -2,16 +2,18 @@ package main
 
 import (
 	"github.com/gofiber/fiber/v2"
+	"route-rover-go/config"
+	"route-rover-go/database"
+	"route-rover-go/routes"
 )
 
 func main() {
+	config.LoadEnv()
+	database.ConnectDB()
+
 	app := fiber.New()
 
-	// Define a simple route
-	app.Get("/", func(c *fiber.Ctx) error {
-		return c.SendString("Hello, Fiber!")
-	})
+	routes.UserRoutes(app)
 
-	// Start the server
 	app.Listen(":8080")
 }
