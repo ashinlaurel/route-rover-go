@@ -3,40 +3,44 @@ package database
 import (
 	"context"
 	"fmt"
-	"log"
-	"os"
 	"time"
 
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-var Client *mongo.Client
+// DatabaseHandler struct to manage database connections
+type DatabaseHandler struct {
+	Client         *mongo.Client
+	Database       *mongo.Database
+	UserCollection *mongo.Collection
+}
 
-func ConnectDB() {
-	uri := os.Getenv("MONGO_URI") // Read from .env file
-	if uri == "" {
-		uri = "mongodb://localhost:27017" // Default to local MongoDB
-	}
-
+// NewDatabase initializes the MongoDB connection
+func NewDatabase() (*DatabaseHandler, error) {
+	uri := "mongodb://localhost:27017"
+	clientOptions := options.Client().ApplyURI(uri)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
+	client, err := mongo.Connect(ctx, clientOptions)
 	if err != nil {
-		log.Fatal("MongoDB Connection Error:", err)
+		return nil, err
 	}
 
 	err = client.Ping(ctx, nil)
 	if err != nil {
-		log.Fatal("MongoDB Ping Failed:", err)
+		return nil, fmt.Errorf("failed to connect to MongoDB: %w", err)
 	}
 
-	fmt.Println("✅ Connected to MongoDB")
-	Client = client
-}
+	fmt.Println("Connected to MongoDB!")
 
-// GetCollection returns a reference to a MongoDB collection
-func GetCollection(collectionName string) *mongo.Collection {
-	return Client.Database("socialmedia").Collection(collectionName)
+	// Initialize collections
+	db := client.Database("route-rover-dev")
+
+	return &DatabaseHandler{
+		Client:         client,
+		Database:       db,
+		UserCollection: db.Collection("users"),
+	}, nil
 }

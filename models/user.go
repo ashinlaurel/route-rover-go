@@ -8,3 +8,7 @@ type User struct {
 	Email    string             `bson:"email" json:"email"`
 	Password string             `bson:"password,omitempty" json:"-"`
 }
+
+func (User) CollectionName() string {
+	return "users"
+}
