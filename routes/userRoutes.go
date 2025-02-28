@@ -10,6 +10,6 @@ import (
 func UserRoutes(app *fiber.App, db *database.DatabaseHandler) {
 	api := app.Group("/api")
 	api.Post("/register", controllers.RegisterUser(db))
-	// api.Post("/login", controllers.LoginUser)
+	api.Post("/login", controllers.LoginUser(db))
 	// api.Get("/users", controllers.GetUsers)
 }

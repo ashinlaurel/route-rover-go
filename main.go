@@ -22,6 +22,7 @@ func main() {
 	app := fiber.New()
 
 	// Routes
+	routes.AuthRoutes(app, db)
 	routes.UserRoutes(app, db)
 
 	// Start server
