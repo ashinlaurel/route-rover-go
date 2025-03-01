@@ -67,6 +67,3 @@ func RegisterUser(db *database.DatabaseHandler) fiber.Handler {
 		})
 	}
 }
-
-// LoginUser handles user authentication
-
