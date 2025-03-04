@@ -31,9 +31,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RELEASE_SECRET }}
           tag_name: v${{ env.VERSION }}
-          release_name: "Release v${{ env.VERSION }}"
+          name: "Release v${{ env.VERSION }}"
           draft: false
           prerelease: false
           files: releases/route-rover
