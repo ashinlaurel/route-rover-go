@@ -19,4 +19,8 @@ func AuthRoutes(app *fiber.App, db *database.DatabaseHandler) {
 	auth.Post("/login", controllers.LoginUser(db))
 	auth.Get("/profile", middlewares.AuthMiddleware(), controllers.GetUserProfile(db))
 	auth.Put("/profile", middlewares.AuthMiddleware(), controllers.UpdateUserProfile(db))
+
+	// Google OAuth routes
+	auth.Get("/google/login", controllers.GoogleLogin(db))
+	auth.Get("/google/callback", controllers.GoogleCallback(db))
 }
