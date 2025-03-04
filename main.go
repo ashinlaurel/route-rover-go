@@ -5,18 +5,28 @@ import (
 	"log"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/joho/godotenv"
 
+	"route-rover-go/config"
 	"route-rover-go/database"
 	"route-rover-go/routes"
 )
 
 func main() {
+	// Load environment variables
+	if err := godotenv.Load(); err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
 	// Initialize database
 	db, err := database.NewDatabase()
 	if err != nil {
 		log.Fatal("Database connection failed:", err)
 	}
 	// defer db.Client.Disconnect(nil)
+
+	// Initialize OAuth configuration
+	config.InitOAuthConfig()
 
 	// Create Fiber app
 	app := fiber.New()

@@ -2,7 +2,10 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"log"
+	"route-rover-go/config"
 	"route-rover-go/database"
 	"route-rover-go/middlewares"
 	"route-rover-go/models"
@@ -11,6 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/oauth2"
 )
 
 func LoginUser(db *database.DatabaseHandler) fiber.Handler {
@@ -89,80 +93,144 @@ func GetUserProfile(db *database.DatabaseHandler) fiber.Handler {
 	}
 }
 
-// UpdateUserProfile updates the user profile
-func UpdateUserProfile(db *database.DatabaseHandler) fiber.Handler {
+// GoogleLogin initiates the Google OAuth flow
+func GoogleLogin(db *database.DatabaseHandler) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		// Get user ID from context
-		userIDStr := c.Locals("userID").(string)
-		userID, err := primitive.ObjectIDFromHex(userIDStr)
+		// Generate random state
+		state := "random-state" // In production, use a secure random string
+		c.Cookie(&fiber.Cookie{
+			Name:     "oauth_state",
+			Value:    state,
+			HTTPOnly: true,
+		})
+
+		// Redirect to Google's consent page
+		url := config.GoogleOAuthConfig.AuthCodeURL(state)
+		return c.Redirect(url)
+	}
+}
+
+// GoogleCallback handles the OAuth callback from Google
+func GoogleCallback(db *database.DatabaseHandler) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		// Verify state
+		state := c.Cookies("oauth_state")
+		if state == "" || state != c.Query("state") {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid state"})
+		}
+
+		// Get authorization code
+		code := c.Query("code")
+		if code == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Code not found"})
+		}
+
+		// Exchange code for token
+		token, err := config.GoogleOAuthConfig.Exchange(context.Background(), code)
 		if err != nil {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid user ID"})
+			log.Printf("Error exchanging code for token: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to exchange token"})
 		}
 
-		// Parse request body
-		var updateData struct {
-			Name     string `json:"name"`
-			Email    string `json:"email"`
-			Password string `json:"password,omitempty"`
-		}
-		if err := c.BodyParser(&updateData); err != nil {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
+		// Get user info from Google
+		userInfo, err := getUserInfoFromGoogle(token)
+		if err != nil {
+			log.Printf("Error getting user info: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to get user info"})
 		}
 
-		// Create update document
-		update := bson.M{}
-		if updateData.Name != "" {
-			update["name"] = updateData.Name
-		}
-		if updateData.Email != "" {
-			// Check if email is already taken
-			if updateData.Email != "" {
-				var existingUser models.User
-				err := db.UserCollection.FindOne(context.TODO(), bson.M{
-					"email": updateData.Email,
-					"_id":   bson.M{"$ne": userID},
-				}).Decode(&existingUser)
-				if err == nil {
-					return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Email already in use"})
-				}
+		// Check if user exists
+		var user models.User
+		err = db.UserCollection.FindOne(context.TODO(), bson.M{
+			"$or": []bson.M{
+				{"email": userInfo.Email},
+				{"google_id": userInfo.ID},
+			},
+		}).Decode(&user)
+
+		if err != nil {
+			// User doesn't exist, create new user
+			user = models.User{
+				ID:             primitive.NewObjectID(),
+				Name:           userInfo.Name,
+				Email:          userInfo.Email,
+				GoogleID:       userInfo.ID,
+				AuthProvider:   "google",
+				ProfilePicture: userInfo.Picture,
 			}
-			update["email"] = updateData.Email
-		}
-		if updateData.Password != "" {
-			// Hash new password
-			hashedPassword, err := bcrypt.GenerateFromPassword([]byte(updateData.Password), bcrypt.DefaultCost)
+			_, err = db.UserCollection.InsertOne(context.TODO(), user)
 			if err != nil {
-				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Could not process request"})
+				log.Printf("Error creating user: %v", err)
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create user"})
 			}
-			update["password"] = string(hashedPassword)
-		}
-
-		// Update user in database
-		if len(update) > 0 {
+		} else if user.GoogleID == "" {
+			// User exists but hasn't linked Google account
 			_, err = db.UserCollection.UpdateOne(
 				context.TODO(),
-				bson.M{"_id": userID},
-				bson.M{"$set": update},
+				bson.M{"_id": user.ID},
+				bson.M{
+					"$set": bson.M{
+						"google_id":       userInfo.ID,
+						"auth_provider":   "google",
+						"profile_picture": userInfo.Picture,
+					},
+				},
 			)
 			if err != nil {
-				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Could not update user"})
+				log.Printf("Error updating user: %v", err)
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update user"})
 			}
 		}
 
-		// Fetch updated user data
-		var updatedUser models.User
-		err = db.UserCollection.FindOne(context.TODO(), bson.M{"_id": userID}).Decode(&updatedUser)
+		// Generate JWT token
+		tokenString, err := middlewares.GenerateToken(user.ID)
 		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Could not retrieve updated user"})
+			log.Printf("Error generating token: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate token"})
 		}
 
-		// Return updated user data
+		// Return token and user info
 		return c.Status(fiber.StatusOK).JSON(fiber.Map{
+			"token": tokenString,
 			"user": fiber.Map{
-				"id":    updatedUser.ID,
-				"name":  updatedUser.Name,
-				"email": updatedUser.Email,
+				"id":              user.ID,
+				"name":            user.Name,
+				"email":           user.Email,
+				"auth_provider":   user.AuthProvider,
+				"profile_picture": user.ProfilePicture,
 			},
 		})
 	}
+}
+
+// GoogleUserInfo represents the user info from Google
+type GoogleUserInfo struct {
+	ID            string `json:"id"`
+	Email         string `json:"email"`
+	VerifiedEmail bool   `json:"verified_email"`
+	Name          string `json:"name"`
+	GivenName     string `json:"given_name"`
+	FamilyName    string `json:"family_name"`
+	Picture       string `json:"picture"`
+}
+
+func getUserInfoFromGoogle(token *oauth2.Token) (*GoogleUserInfo, error) {
+	client := config.GoogleOAuthConfig.Client(context.Background(), token)
+	resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var userInfo GoogleUserInfo
+	if err := json.Unmarshal(data, &userInfo); err != nil {
+		return nil, err
+	}
+
+	return &userInfo, nil
 }
